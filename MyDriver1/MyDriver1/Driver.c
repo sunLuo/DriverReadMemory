@@ -16,6 +16,7 @@ ULONG processId;
 ULONG_PTR ClientAddress;  // 改为 ULONG_PTR
 PDEVICE_OBJECT pDeviceObject;
 UNICODE_STRING dev, dos; //driver registry paths
+PLOAD_IMAGE_NOTIFY_ROUTINE  g_ImageNotifyCallback = NULL;
 
 typedef struct _KERNEL_READ_REQUEST
 {
@@ -58,7 +59,7 @@ NTSTATUS KernelWriteVirtualMemory(PEPROCESS Process, PVOID SourceAddress, PVOID 
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath);
 NTSTATUS UnloadDriver(PDRIVER_OBJECT DriverObject);
-PLOAD_IMAGE_NOTIFY_ROUTINE ImageLoadCallback(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo);
+VOID ImageLoadCallback(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo);
 NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp);
 NTSTATUS CreateCall(PDEVICE_OBJECT DeviceObject, PIRP irp);
 NTSTATUS CloseCall(PDEVICE_OBJECT DeviceObject, PIRP irp);
@@ -67,9 +68,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
 	UNREFERENCED_PARAMETER(RegistryPath);
 	DriverObject->DriverUnload = UnloadDriver;
-	DbgPrintEx(0, 0, "Started");
+	DbgPrintEx(0, 0, "lzhDriverEntry Started");
 
-	//PsSetLoadImageNotifyRoutine(ImageLoadCallback);
+	NTSTATUS status = PsSetLoadImageNotifyRoutine(ImageLoadCallback);
+	DbgPrintEx(
+		DPFLTR_IHVDRIVER_ID,
+		DPFLTR_INFO_LEVEL,
+		"lzh PsSetLoadImageNotifyRoutine status = 0x%08X\n",
+		status
+	);
+	g_ImageNotifyCallback = ImageLoadCallback;
 
 	RtlInitUnicodeString(&dev, L"\\Device\\kbotl");
 	RtlInitUnicodeString(&dos, L"\\DosDevices\\kbotl");
@@ -90,8 +98,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 NTSTATUS UnloadDriver(PDRIVER_OBJECT DriverObject)
 {
 	//DbgPrintEx(0, 0, "Unloaded");
-
-	//PsRemoveLoadImageNotifyRoutine(ImageLoadCallback);
+	// 必须反注册，否则蓝屏
+	if (g_ImageNotifyCallback)
+	{
+		PsRemoveLoadImageNotifyRoutine(ImageLoadCallback);
+		g_ImageNotifyCallback = NULL;
+	}
 	IoDeleteSymbolicLink(&dos);
 	IoDeleteDevice(DriverObject->DeviceObject);
 
@@ -99,18 +111,41 @@ NTSTATUS UnloadDriver(PDRIVER_OBJECT DriverObject)
 }
 
 //searches for lol
-PLOAD_IMAGE_NOTIFY_ROUTINE ImageLoadCallback(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo)
+VOID  ImageLoadCallback(PUNICODE_STRING FullImageName, HANDLE ProcessId, PIMAGE_INFO ImageInfo)
 {
-	if (wcsstr(FullImageName->Buffer, L"\\Riot Games\\League of Legends\\Game\\League of Legends.exe"))
+	// 安全校验指针有效性，防止蓝屏
+	if (FullImageName == NULL || FullImageName->Buffer == NULL)
+		return;
+	// 直接打印模块完整路径、PID、加载基址
+	WCHAR buf[128] = { 0 };
+	ULONG copy = min(FullImageName->Length, sizeof(buf) - sizeof(WCHAR));
+	RtlCopyMemory(buf, FullImageName->Buffer, copy);
+	if (wcsstr(
+		FullImageName->Buffer,
+		L".exe"))
 	{
-		DbgPrintEx(0, 0, "Lol found\n");
-		DbgPrintEx(0, 0, "Found at PID: %d \n", ProcessId);
-
-		ClientAddress = (ULONG_PTR)ImageInfo->ImageBase;
-		processId = ProcessId;
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "lzhModuleLoad PID=%u path=%ws Base=%p\n",
+			HandleToULong(ProcessId), buf, ImageInfo->ImageBase);
 	}
-
-	return STATUS_SUCCESS;
+	if (wcsstr(buf, L"\\Device\\HarddiskVolume4\\Program Files\\英雄联盟(26)\\Game\\League of Legends.exe"))
+	{
+		// 已经记录过，忽略后续匹配
+		if (processId != 0)
+		{
+			DbgPrintEx(
+				DPFLTR_IHVDRIVER_ID,
+				DPFLTR_INFO_LEVEL,
+				"lzh LOL already found, ignore PID=%lu\n",
+				HandleToULong(ProcessId)
+			);
+			return;
+		}
+		DbgPrintEx(0, 0, "lzh Lol found\n");
+		DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "lzhModuleLoad PID=%u path=%ws Base=%p\n",
+			HandleToULong(ProcessId), buf, ImageInfo->ImageBase);
+		ClientAddress = (ULONG_PTR)ImageInfo->ImageBase;
+		processId = HandleToULong(ProcessId);
+	}
 }
 
 NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
@@ -129,19 +164,13 @@ NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 		PKERNEL_READ_REQUEST ReadInput = (PKERNEL_READ_REQUEST)Irp->AssociatedIrp.SystemBuffer;
 		PKERNEL_READ_REQUEST ReadOutput = (PKERNEL_READ_REQUEST)Irp->AssociatedIrp.SystemBuffer;
 		PEPROCESS Process;
-
-		DbgPrintEx(0, 0, "PreValue: %lu , 0x%x\n", ReadOutput->pBuff, ReadOutput->pBuff);
-		DbgPrintEx(0, 0, "PreValue2: %lu , 0x%x\n", ReadInput->pBuff, ReadInput->pBuff);
-
 		if (NT_SUCCESS(PsLookupProcessByProcessId(ReadInput->ProcessId, &Process)))
 		{
 			KernelReadVirtualMemory(Process, ReadInput->Address, &ReadInput->pBuff, ReadInput->Size);
 		}
-
 		UNREFERENCED_PARAMETER(ReadOutput);
-		DbgPrintEx(0, 0, "Read Params:  %lu, %#010x, %d\n", ReadInput->ProcessId, ReadInput->Address, ReadInput->Size);
-		DbgPrintEx(0, 0, "Value: %lu , 0x%x\n", ReadOutput->pBuff, ReadOutput->pBuff);
-		DbgPrintEx(0, 0, "Value2: %lu , 0x%x\n", ReadInput->Address, ReadInput->Address);
+		DbgPrintEx(0, 0, "lzh Read Params:  %lu, %llX, %d\n", ReadInput->ProcessId, ReadInput->Address, ReadInput->Size);
+		DbgPrintEx(0, 0, "lzh Value: %lu , %llX\n", ReadOutput->pBuff, ReadOutput->pBuff);
 
 		Status = STATUS_SUCCESS;
 		ByteIo = sizeof(KERNEL_READ_REQUEST);
@@ -156,7 +185,7 @@ NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 			KernelWriteVirtualMemory(Process, &WriteInput->pBuff, WriteInput->Address, WriteInput->Size);
 		}
 
-		DbgPrintEx(0, 0, "Write Params:  %lu, %#010x \n", WriteInput->pBuff, WriteInput->Address);
+		DbgPrintEx(0, 0, "lzh Write Params:  %lu, %llX \n", WriteInput->pBuff, WriteInput->Address);
 
 		Status = STATUS_SUCCESS;
 		ByteIo = sizeof(KERNEL_WRITE_REQUEST);
@@ -166,7 +195,7 @@ NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 		PULONG_PTR OutPut = (PULONG_PTR)Irp->AssociatedIrp.SystemBuffer;
 		*OutPut = processId;
 
-		DbgPrintEx(0, 0, "Pid: %#010x", processId);
+		DbgPrintEx(0, 0, "lzh Pid: %u", processId);
 		Status = STATUS_SUCCESS;
 		ByteIo = sizeof(*OutPut);
 	}
@@ -175,13 +204,13 @@ NTSTATUS IoControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 		PULONGLONG OutPut = (PULONGLONG)Irp->AssociatedIrp.SystemBuffer;
 		*OutPut = ClientAddress;
 
-		DbgPrintEx(0, 0, "ClientAddress: %#010x", ClientAddress);
+		DbgPrintEx(0, 0, "lzh ClientAddress: %llX\n", ClientAddress);
 		Status = STATUS_SUCCESS;
 		ByteIo = sizeof(*OutPut);
 	}
 	else
 	{
-		DbgPrintEx(0, 0, "IoControl failed\n");
+		DbgPrintEx(0, 0, "lzh IoControl failed\n");
 		Status = STATUS_INVALID_PARAMETER;
 		ByteIo = 0;
 	}
@@ -199,7 +228,7 @@ NTSTATUS CreateCall(PDEVICE_OBJECT DeviceObject, PIRP irp)
 	irp->IoStatus.Status = STATUS_SUCCESS;
 	irp->IoStatus.Information = 0;
 
-	DbgPrintEx(0, 0, "CreateCall\n");
+	DbgPrintEx(0, 0, "lzh CreateCall\n");
 
 	IoCompleteRequest(irp, IO_NO_INCREMENT);
 	return STATUS_SUCCESS;
@@ -211,7 +240,7 @@ NTSTATUS CloseCall(PDEVICE_OBJECT DeviceObject, PIRP irp)
 	irp->IoStatus.Status = STATUS_SUCCESS;
 	irp->IoStatus.Information = 0;
 
-	DbgPrintEx(0, 0, "CloseCall\n");
+	DbgPrintEx(0, 0, "lzh CloseCall\n");
 
 	IoCompleteRequest(irp, IO_NO_INCREMENT);
 	return STATUS_SUCCESS;

@@ -2,5 +2,10 @@
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <SignMode>Off</SignMode>
+    <TestCertificate>CN="WDKTestCert luozhe,134336788640527402" | CF9E11B3F065BD49AC0A92725ECA5CEDDACB3401</TestCertificate>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <TestCertificate>CN="WDKTestCert luozhe,134336788640527402" | CF9E11B3F065BD49AC0A92725ECA5CEDDACB3401</TestCertificate>
+    <SignMode>Off</SignMode>
   </PropertyGroup>
 </Project>

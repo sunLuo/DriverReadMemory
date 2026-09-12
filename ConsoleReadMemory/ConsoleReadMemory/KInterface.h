@@ -53,13 +53,44 @@ public:
 			0,
 			0);
 
-		//ProcessID = Process();
+		ProcessID = Process();
+		std::cout << "ProcessID: " << ProcessID << std::endl;
 	}
 
+	DWORD Process()
+	{
+		if (ProcessID)
+			return ProcessID;
 
+		if (hDriver == INVALID_HANDLE_VALUE)
+			return false;
+
+		ULONG Id = 0;
+		DWORD Bytes = 0;
+
+		if (DeviceIoControl(hDriver, IO_GET_ID_REQUEST, &Id, sizeof(Id), &Id, sizeof(Id), &Bytes, NULL))
+			return Id;
+		else
+			return false;
+	}
+
+	DWORD64 GetClientModule()
+	{
+		if (hDriver == INVALID_HANDLE_VALUE)
+			return false;
+
+		DWORD64 Address = 0;
+		DWORD Bytes = 0;
+
+		if (DeviceIoControl(hDriver, IO_GET_MODULE_REQUEST, &Address, sizeof(Address),
+			&Address, sizeof(Address), &Bytes, NULL))
+			return Address;
+		else
+			return false;
+	}
 
 	template <typename type>
-	type Read(ULONG_PTR ReadAddress, ULONG processID, SIZE_T Size = sizeof(type))
+	type Read(ULONG_PTR ReadAddress, SIZE_T Size = sizeof(type))
 	{
 		//type cData;
 		if (hDriver == INVALID_HANDLE_VALUE)
@@ -68,7 +99,7 @@ public:
 		//DWORD Return, Bytes;
 		KERNEL_READ_REQUEST ReadRequest;
 
-		ReadRequest.ProcessId = processID;
+		ReadRequest.ProcessId = ProcessID;
 		ReadRequest.Address = ReadAddress;
 		//ReadRequest.pBuff = &cData;
 		ReadRequest.Size = Size;
@@ -80,7 +111,6 @@ public:
 	}
 
 	
-
 	/*bool Write(ULONG WriteAddress, ULONG WriteValue, SIZE_T WriteSize)
 	{
 		if (hDriver == INVALID_HANDLE_VALUE)
@@ -103,6 +133,6 @@ public:
 
 static KInterface Memory(R"(\\.\kbotl)");
 
-//static DWORD64 ClientAddress = Memory.GetClientModule();
+static DWORD64 ClientAddress = Memory.GetClientModule();
 
 #endif //!_KINTERFACE_H_
